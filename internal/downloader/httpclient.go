@@ -1,0 +1,140 @@
+package downloader
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+type refererContextKey struct{}
+
+// WithReferer attaches the original source page to every playlist and segment
+// request made with this context.
+func WithReferer(ctx context.Context, referer string) context.Context {
+	referer = strings.TrimSpace(referer)
+	if referer == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, refererContextKey{}, referer)
+}
+
+// Default headers to mimic a browser request.
+var defaultHeaders = map[string]string{
+	"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+	"Accept":          "*/*",
+	"Accept-Language": "en-US,en;q=0.9",
+	"Sec-Fetch-Dest":  "empty",
+	"Sec-Fetch-Mode":  "cors",
+	"Sec-Fetch-Site":  "cross-site",
+}
+
+// originMap maps CDN hostnames to the Origin/Referer they expect.
+// helvid.com = player CDN ของ upload18 — บล็อกด้วย CF ถ้าไม่มี Referer/Origin
+// เป็น upload18.org (playlist + segment โดน gate เดียวกัน)
+var originMap = map[string]string{
+	"surrit.com": "https://missav.ai",
+	"phncdn.com": "https://www.pornhub.com",
+	"helvid.com": "https://upload18.org",
+}
+
+// rateLimitedDomains are CDN domains that enforce rate limiting.
+var rateLimitedDomains = map[string]bool{
+	"surrit.com": true,
+	"phncdn.com": true,
+}
+
+// httpGet performs an HTTP GET with browser-like headers (ctx-aware — ยกเลิกได้กลางคำขอ).
+func httpGet(ctx context.Context, rawURL string) (*http.Response, error) {
+	return httpGetWithRange(ctx, rawURL, nil)
+}
+
+func httpGetWithRange(ctx context.Context, rawURL string, byteRange *ByteRange) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	for k, v := range defaultHeaders {
+		req.Header.Set(k, v)
+	}
+	if byteRange != nil {
+		end := byteRange.Offset + byteRange.Length - 1
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", byteRange.Offset, end))
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err == nil {
+		host := parsed.Hostname()
+		origin := findOrigin(host)
+		if referer, ok := ctx.Value(refererContextKey{}).(string); ok && referer != "" {
+			req.Header.Set("Referer", referer)
+			if source, parseErr := url.Parse(referer); parseErr == nil && source.Scheme != "" && source.Host != "" {
+				req.Header.Set("Origin", source.Scheme+"://"+source.Host)
+			}
+			return http.DefaultClient.Do(req)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+			req.Header.Set("Referer", origin+"/")
+		}
+	}
+
+	return http.DefaultClient.Do(req)
+}
+
+func findOrigin(host string) string {
+	if origin, ok := originMap[host]; ok {
+		return origin
+	}
+	for {
+		idx := len(host)
+		for i := 0; i < len(host); i++ {
+			if host[i] == '.' {
+				idx = i
+				break
+			}
+		}
+		if idx >= len(host)-1 {
+			break
+		}
+		host = host[idx+1:]
+		if origin, ok := originMap[host]; ok {
+			return origin
+		}
+	}
+	return ""
+}
+
+// IsRateLimitedDomain checks if a URL belongs to a rate-limited domain.
+func IsRateLimitedDomain(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return findRateLimited(parsed.Hostname())
+}
+
+func findRateLimited(host string) bool {
+	if rateLimitedDomains[host] {
+		return true
+	}
+	for {
+		idx := len(host)
+		for i := 0; i < len(host); i++ {
+			if host[i] == '.' {
+				idx = i
+				break
+			}
+		}
+		if idx >= len(host)-1 {
+			break
+		}
+		host = host[idx+1:]
+		if rateLimitedDomains[host] {
+			return true
+		}
+	}
+	return false
+}
