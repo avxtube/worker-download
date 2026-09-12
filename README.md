@@ -10,6 +10,7 @@ Queue-based download worker สำหรับ AVXTUBE — claim งานจา
 - **Sources** — storage/upload-server ingest, `metadata.playlists`, direct URL และ scraper fallback จาก `metadata.source`
 - **HLS headers** — ใช้ `metadata.source` เป็น Referer และ Origin ของทุก playlist/segment request
 - **Temp ingest output** — อัปโหลดเข้า `video_process.tempStorageId` (หรือ temp stream storage ตาม priority) แล้วสร้าง ingest `destination=storage,status=uploaded,sourceType=processed`; file → `ready_original`
+- **MP4 faststart gate** — ตรวจ top-level atom ว่า `moov` อยู่ก่อน `mdat` ก่อน upload ทุกงาน; ถ้าไม่ใช่จะ remux `+faststart` และตรวจซ้ำก่อนแทนไฟล์เดิม
 - **Auto Retry + Backoff** — fail → กลับเป็น pending ใน doc เดิม (1m, 2m) ครบ 3 ครั้ง → failed ถาวร + file → `error`
 - **Instant Cancel** — admin เซ็ต `status: cancelled` → watcher (5s) จุดระเบิด context → HTTP/ffmpeg/S3 หยุดทันที
 - **Graceful Shutdown** — SIGTERM → คืนงานเข้าคิว (Release) + mark worker offline

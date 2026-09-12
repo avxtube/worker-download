@@ -114,6 +114,19 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 			FileName: models.FileNameOriginal, MimeType: "video/mp4", Size: info.Size(),
 		}}
 	}
+	for index := range assets {
+		if assets[index].Kind != downloader.SplitAssetVideo {
+			continue
+		}
+		if err := downloader.EnsureMoovBeforeMdat(ctx, assets[index].Path, nil); err != nil {
+			return fmt.Errorf("ensure video faststart: %w", err)
+		}
+		assetInfo, statErr := os.Stat(assets[index].Path)
+		if statErr != nil {
+			return fmt.Errorf("stat faststart video: %w", statErr)
+		}
+		assets[index].Size = assetInfo.Size()
+	}
 
 	info, err := os.Stat(outputPath)
 	if err != nil {
