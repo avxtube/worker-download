@@ -16,6 +16,7 @@ Queue-based download worker สำหรับ AVXTUBE — claim งานจา
 - **Graceful Shutdown** — SIGTERM → คืนงานเข้าคิว (Release) + mark worker offline
 - **Heartbeat** — รายงานเข้า `workers` ทุก 1 นาที (idle/busy/paused, disk ≥90% = paused + enable=false)
 - **Disk-safe split** — ก่อนแยก video/audio/subtitle ต้องมีพื้นที่ว่างอย่างน้อยขนาด source + 512 MB; ถ้าพื้นที่ไม่พอจะลบ split output ที่ไม่สมบูรณ์และ requeue โดยไม่กิน retry
+- **Early segment cleanup** — หลังรวม HLS และตรวจ `file_original.mp4` ผ่านแล้ว จะลบ source segments ทันทีเพื่อคืนพื้นที่ก่อนเริ่ม split
 - **Realtime dashboard** — `:8885` แสดง CPU, RAM, disk/I/O และ progress งานของทุก instance ผ่าน SSE ทุก 1 วินาที (เปิดเว็บโดย worker `@1` ตัวเดียว)
 - **Live process log** — กด `View log` ในแต่ละ job หรือเปิด `/log/<slug>.log` เพื่ออ่าน `logs/process/<slug>.log`
 - **Realtime progress** — บันทึก `timeline`/`overallPercent` ทุก 1% แต่ process log ยังคง throttle ทุก 10%

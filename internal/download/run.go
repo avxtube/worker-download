@@ -71,6 +71,9 @@ func Run(ctx context.Context, process *models.VideoProcess) (runErr error) {
 	if err := downloader.ValidateVideoFile(outputPath); err != nil {
 		return fmt.Errorf("validate source video: %v: %w", err, queue.ErrPermanent)
 	}
+	if err := cleanupMergedSegments(workDir, outputPath); err != nil {
+		return fmt.Errorf("clean merged source segments: %w", err)
+	}
 	var assets []downloader.SplitAsset
 	if config.AppConfig.MediaLayout == "separated" {
 		separatedDir := filepath.Join(workDir, "separated")
@@ -292,6 +295,24 @@ func ensureSplitDiskSpace(inputPath, workDir string) error {
 
 func requiredSplitDiskBytes(sourceSize int64) int64 {
 	return sourceSize + splitDiskReserve
+}
+
+func cleanupMergedSegments(workDir, outputPath string) error {
+	if filepath.Clean(outputPath) != filepath.Join(workDir, models.FileNameOriginal) {
+		return nil
+	}
+	segmentsDir := filepath.Join(workDir, "segments")
+	if _, err := os.Stat(segmentsDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.RemoveAll(segmentsDir); err != nil {
+		return err
+	}
+	log.Printf("🧹 Removed merged HLS segments: %s", segmentsDir)
+	return nil
 }
 
 func acquireSource(ctx context.Context, process *models.VideoProcess, file *models.File, workDir, slug string) (string, *models.Ingest, string, string, error) {
