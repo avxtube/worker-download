@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"worker-download/internal/core/enums"
-	"worker-download/internal/core/logger"
 )
 
 // ─── Worker ID ───────────────────────────────────────────────
@@ -39,17 +38,15 @@ func RandomString(n int, special bool) string {
 
 // ─── Process Logger ──────────────────────────────────────────
 
-// ProcessLogger writes to both the global rotating log and a per-process log file.
+// ProcessLogger writes to both the terminal and a per-file log.
 type ProcessLogger struct {
-	closers []io.Closer
+	file *os.File
 }
 
-// NewProcessLogger creates a per-process file logger and tees global log output
-// into it during execution — stdout keeps receiving everything, so journalctl
-// shows the job as it runs instead of going silent until it finishes.
+// NewProcessLogger creates a per-file logger. During execution every message is
+// written to both the terminal and the file-specific log.
 // On retry, it appends to the existing log file instead of overwriting.
-func NewProcessLogger(slug string, workDirs ...string) *ProcessLogger {
-	logDir := filepath.Join("logs", "process")
+func NewProcessLogger(logDir, slug string) *ProcessLogger {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.Printf("⚠️ Failed to create log dir: %v", err)
 		return &ProcessLogger{}
@@ -62,28 +59,18 @@ func NewProcessLogger(slug string, workDirs ...string) *ProcessLogger {
 		return &ProcessLogger{}
 	}
 
-	writers := []io.Writer{logger.GlobalWriter, f}
-	closers := []io.Closer{f}
-	if len(workDirs) > 0 && workDirs[0] != "" {
-		if err := os.MkdirAll(workDirs[0], 0755); err == nil {
-			if jobLog, openErr := os.OpenFile(filepath.Join(workDirs[0], "job.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); openErr == nil {
-				writers = append(writers, jobLog)
-				closers = append(closers, jobLog)
-			}
-		}
-	}
-	log.SetOutput(io.MultiWriter(writers...))
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
 
-	return &ProcessLogger{closers: closers}
+	return &ProcessLogger{file: f}
 }
 
-// Close restores the global logger to stdout only and closes the per-process file.
+// Close restores terminal-only logging and closes the per-file log.
 func (pl *ProcessLogger) Close() {
-	log.SetOutput(logger.GlobalWriter)
-	for _, closer := range pl.closers {
-		_ = closer.Close()
+	log.SetOutput(os.Stdout)
+	if pl.file != nil {
+		_ = pl.file.Close()
+		pl.file = nil
 	}
-	pl.closers = nil
 }
 
 // Printf is kept for compatibility but is a no-op — use log.Printf directly.
@@ -102,8 +89,7 @@ func LogMain(format string, v ...interface{}) {
 // ─── Old Log Cleanup ──────────────────────────────────────────
 
 // CleanOldLogs removes process log files older than 7 days.
-func CleanOldLogs() {
-	logDir := filepath.Join("logs", "process")
+func CleanOldLogs(logDir string) {
 	if _, err := os.Stat(logDir); os.IsNotExist(err) {
 		return
 	}

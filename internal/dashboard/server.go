@@ -27,7 +27,7 @@ func workerGroup(workerID string) string {
 	return workerID
 }
 
-func Start(ctx context.Context, port, workerID, storagePath string) {
+func Start(ctx context.Context, port, workerID, storagePath, logDir string) {
 	group := workerGroup(workerID)
 	hub := newHub(group, storagePath)
 	go hub.run(ctx)
@@ -43,9 +43,10 @@ func Start(ctx context.Context, port, workerID, storagePath string) {
 		_, _ = w.Write(indexHTML)
 	})
 	mux.HandleFunc("/events", hub.serveEvents)
-	mux.HandleFunc("/log/", serveProcessLogBySlug())
+	mux.HandleFunc("/log-history", serveLogHistory(logDir))
+	mux.HandleFunc("/log/", serveProcessLogBySlug(logDir))
 	// Keep the job-ID endpoint for compatibility with older dashboard builds.
-	mux.HandleFunc("/logs/", serveProcessLog(group))
+	mux.HandleFunc("/logs/", serveProcessLog(group, logDir))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","service":"worker-download-dashboard"}`))

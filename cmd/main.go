@@ -20,16 +20,21 @@ import (
 var version = "dev"
 
 func main() {
+	log.SetOutput(os.Stdout)
 	config.Load()
 	config.AppConfig.WorkerVersion = version
 	workerID := utils.GenerateWorkerID()
 	log.Printf("🚀 Starting Worker Download %s [Worker: %s]", version, workerID)
 
-	// log ทั่วไปออก stdout ให้ systemd/journald เก็บและหมุนให้
-	// (journalctl -u worker-download -f) — ของเดิมเรียก logger.Init ซึ่ง
-	// log.SetOutput ทับ stdout ทำให้ journal ว่างเปล่า และไฟล์ที่หมุนไว้
-	// ส่วน log รายงาน (logs/process/{slug}.log) เก็บไว้ในเครื่อง 7 วัน
-	// และเปิดดูได้ผ่าน dashboard ที่ /log/{slug}.log
+	// Runtime artifacts stay beside the installed binary. Locally that means
+	// .build/work and .build/.log; Linux releases use /opt/worker-download/work
+	// and /opt/worker-download/.log.
+	for _, dir := range []string{config.AppConfig.WorkDir, config.AppConfig.LogDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Printf("❌ Failed to create runtime directory %s: %v", dir, err)
+			os.Exit(1)
+		}
+	}
 
 	// ── MongoDB ───────────────────────────────────────────────
 	if err := database.Connect(); err != nil {
@@ -44,6 +49,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	logDir := config.AppConfig.LogDir
+	utils.CleanOldLogs(logDir)
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				utils.CleanOldLogs(logDir)
+			}
+		}
+	}()
+
 	hbDone := make(chan struct{})
 	go func() {
 		defer close(hbDone)
@@ -51,7 +71,7 @@ func main() {
 	}()
 
 	if dashboard.ShouldStart(workerID) {
-		go dashboard.Start(ctx, config.AppConfig.DashboardPort, workerID, config.AppConfig.WorkDir)
+		go dashboard.Start(ctx, config.AppConfig.DashboardPort, workerID, config.AppConfig.WorkDir, logDir)
 	} else {
 		log.Printf("📺 Download monitor owned by worker @1 (this worker: %s)", workerID)
 	}

@@ -17,11 +17,11 @@ Queue-based download worker สำหรับ AVXTUBE — claim งานจา
 - **Heartbeat** — รายงานเข้า `workers` ทุก 1 นาที (idle/busy/paused, disk ≥90% = paused + enable=false)
 - **Disk-safe split** — ก่อนแยก video/audio/subtitle ต้องมีพื้นที่ว่างอย่างน้อยขนาด source + 512 MB; ถ้าพื้นที่ไม่พอจะลบ split output ที่ไม่สมบูรณ์และ requeue โดยไม่กิน retry
 - **Early segment cleanup** — หลังรวม HLS และตรวจ `file_original.mp4` ผ่านแล้ว จะลบ source segments ทันทีเพื่อคืนพื้นที่ก่อนเริ่ม split
-- **Realtime dashboard** — `:8885` แสดง CPU, RAM, disk/I/O และ progress งานของทุก instance ผ่าน SSE ทุก 1 วินาที (เปิดเว็บโดย worker `@1` ตัวเดียว)
-- **Live process log** — กด `View log` ในแต่ละ job หรือเปิด `/log/<slug>.log` เพื่ออ่าน `logs/process/<slug>.log`
+- **Realtime dashboard** — `:8885` แสดง CPU, RAM, disk/I/O, progress งานของทุก instance และประวัติ log เรียงใหม่ไปเก่า หน้าละ 20 ไฟล์ (เปิดเว็บโดย worker `@1` ตัวเดียว)
+- **Live process log** — กด `View log` ในแต่ละ job หรือเปิด `/log/<slug>.log` เพื่ออ่าน `.build/.log/<slug>.log` บนเครื่องพัฒนา
 - **Realtime progress** — บันทึก `timeline`/`overallPercent` ทุก 1% แต่ process log ยังคง throttle ทุก 10%
 - **Optional NVIDIA GPU** — ทดสอบ NVENC ด้วยการ encode จริงก่อนใช้กับงาน re-encode และ fallback เป็น `libx264` อัตโนมัติ; Dashboard แสดง GPU/VRAM/NVENC เมื่อมี `nvidia-smi`
-- **Failure diagnostics** — เก็บ source, segment และ output ไว้ระหว่าง retry; ลบ work directory หลังสำเร็จ, cancelled หรือ retry ครบ และเก็บ process log แยกไว้ที่ `logs/process/<slug>.log`
+- **Failure diagnostics** — เก็บ source, segment และ output ไว้ระหว่าง retry; ลบ work directory หลังสำเร็จ, cancelled หรือ retry ครบ และเก็บ process log แยกไว้ที่ `.build/.log/<slug>.log` บนเครื่องพัฒนา หรือ `/opt/worker-download/.log/<slug>.log` เมื่อติดตั้งบน Linux
 
 ## Requirements
 
@@ -114,8 +114,8 @@ MEDIA_LAYOUT=muxed
 # Optional (default: .build/work)
 WORK_DIR=.build/work
 
-# Optional — log file (default: logs/worker-download.log)
-LOG_PATH=logs/worker-download.log
+# Optional — per-file log directory (default: .build/.log locally)
+LOG_DIR=.build/.log
 ```
 
 ---
@@ -174,7 +174,7 @@ pending ──claim──▶ processing ──สำเร็จ──▶ comple
    │
    └── admin เซ็ต cancelled ──▶ หยุดทุก I/O ใน ≤5s และเก็บ work/log
        fail ครั้งที่ 3 ──▶ failed ถาวร + file → error
-       completed ──▶ cleanup .build/work/<jobId>
+       completed ──▶ cleanup .build/work/<jobId> (log remains in .build/.log)
 ```
 
 ## Collections Used

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -16,6 +17,7 @@ type Config struct {
 	DashboardPort        string
 	MongoURI             string
 	WorkDir              string
+	LogDir               string
 	StorageEncryptionKey string
 	WorkerVersion        string
 
@@ -29,8 +31,6 @@ type Config struct {
 	// muxed = video+default audio in file_original.mp4 (legacy)
 	// separated = video-only original plus independent audio/subtitle medias.
 	MediaLayout string
-
-	LogPath string // Path to rotating log file (env: LOG_PATH)
 }
 
 // Load reads configuration from environment variables (and .env file).
@@ -42,6 +42,7 @@ func Load() {
 		DashboardPort:        getEnv("DASHBOARD_PORT", getEnv("PORT", "8885")),
 		MongoURI:             getEnv("DATABASE_URL", "mongodb://localhost:27017"),
 		WorkDir:              getEnv("WORK_DIR", defaultWorkDir()),
+		LogDir:               getEnv("LOG_DIR", defaultLogDir()),
 		StorageEncryptionKey: getEnv("STORAGE_ENCRYPTION_KEY", getEnv("BETTER_AUTH_SECRET", "")),
 		WorkerVersion:        getEnv("WORKER_VERSION", "dev"),
 		StorageId:            getEnv("STORAGE_ID", ""),
@@ -49,24 +50,28 @@ func Load() {
 		ScraperURL:           getEnv("SCRAPER_URL", ""),
 		S3UploadConcurrency:  getIntEnv("S3_UPLOAD_CONCURRENCY", 3, 1, 8),
 		MediaLayout:          getMediaLayoutEnv(),
-		LogPath:              getEnv("LOG_PATH", "logs/worker-download.log"),
 	}
 }
 
 func defaultWorkDir() string {
+	return filepath.Join(defaultRuntimeDir(), "work")
+}
+
+func defaultLogDir() string {
+	return filepath.Join(defaultRuntimeDir(), ".log")
+}
+
+func defaultRuntimeDir() string {
 	if executable, err := os.Executable(); err == nil {
-		executableDir := filepath.Dir(executable)
-		if filepath.Base(executableDir) == ".build" {
-			return filepath.Join(executableDir, "work")
+		dir := filepath.Dir(executable)
+		if !strings.Contains(dir, "go-build") {
+			return dir
 		}
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		if filepath.Base(cwd) == ".build" {
-			return filepath.Join(cwd, "work")
-		}
-		return filepath.Join(cwd, ".build", "work")
+		return filepath.Join(cwd, ".build")
 	}
-	return filepath.Join(".build", "work")
+	return ".build"
 }
 
 func getMediaLayoutEnv() string {

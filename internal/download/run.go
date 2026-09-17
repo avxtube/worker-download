@@ -52,7 +52,7 @@ func Run(ctx context.Context, process *models.VideoProcess) (runErr error) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create work directory: %w", err)
 	}
-	processLogger := utils.NewProcessLogger(slug, workDir)
+	processLogger := utils.NewProcessLogger(config.AppConfig.LogDir, slug)
 	defer processLogger.Close()
 	log.Printf("START job=%s file=%s work=%s", process.ID, file.ID, workDir)
 
