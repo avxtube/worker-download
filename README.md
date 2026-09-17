@@ -15,11 +15,12 @@ Queue-based download worker สำหรับ AVXTUBE — claim งานจา
 - **Instant Cancel** — admin เซ็ต `status: cancelled` → watcher (5s) จุดระเบิด context → HTTP/ffmpeg/S3 หยุดทันที
 - **Graceful Shutdown** — SIGTERM → คืนงานเข้าคิว (Release) + mark worker offline
 - **Heartbeat** — รายงานเข้า `workers` ทุก 1 นาที (idle/busy/paused, disk ≥90% = paused + enable=false)
+- **Disk-safe split** — ก่อนแยก video/audio/subtitle ต้องมีพื้นที่ว่างอย่างน้อยขนาด source + 512 MB; ถ้าพื้นที่ไม่พอจะลบ split output ที่ไม่สมบูรณ์และ requeue โดยไม่กิน retry
 - **Realtime dashboard** — `:8885` แสดง CPU, RAM, disk/I/O และ progress งานของทุก instance ผ่าน SSE ทุก 1 วินาที (เปิดเว็บโดย worker `@1` ตัวเดียว)
 - **Live process log** — กด `View log` ในแต่ละ job หรือเปิด `/log/<slug>.log` เพื่ออ่าน `logs/process/<slug>.log`
 - **Realtime progress** — บันทึก `timeline`/`overallPercent` ทุก 1% แต่ process log ยังคง throttle ทุก 10%
 - **Optional NVIDIA GPU** — ทดสอบ NVENC ด้วยการ encode จริงก่อนใช้กับงาน re-encode และ fallback เป็น `libx264` อัตโนมัติ; Dashboard แสดง GPU/VRAM/NVENC เมื่อมี `nvidia-smi`
-- **Failure diagnostics** — เก็บ `.build/work/<jobId>/job.log`, source, segment และ output ไว้เมื่อ failed/retry/cancelled และ cleanup work directory หลังงานสำเร็จเท่านั้น
+- **Failure diagnostics** — เก็บ source, segment และ output ไว้ระหว่าง retry; ลบ work directory หลังสำเร็จ, cancelled หรือ retry ครบ และเก็บ process log แยกไว้ที่ `logs/process/<slug>.log`
 
 ## Requirements
 

@@ -31,7 +31,12 @@ func s3TempObjectKey(now time.Time, fileID, fileName string) string {
 	return fmt.Sprintf("%s/%s_%s", now.Format("2006-01-02"), fileID, fileName)
 }
 
-func Run(ctx context.Context, process *models.VideoProcess) error {
+func Run(ctx context.Context, process *models.VideoProcess) (runErr error) {
+	defer func() {
+		if downloader.IsDiskFullError(runErr) && !errors.Is(runErr, queue.ErrJobRequeue) {
+			runErr = fmt.Errorf("%v: %w", runErr, queue.ErrJobRequeue)
+		}
+	}()
 	if process.FileID == nil || strings.TrimSpace(*process.FileID) == "" {
 		return fmt.Errorf("video_process.fileId is required: %w", queue.ErrPermanent)
 	}
@@ -68,13 +73,27 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 	}
 	var assets []downloader.SplitAsset
 	if config.AppConfig.MediaLayout == "separated" {
+		separatedDir := filepath.Join(workDir, "separated")
+		// Split outputs are never resumed. Remove leftovers from a previous
+		// interrupted attempt before calculating how much free space remains.
+		if err := os.RemoveAll(separatedDir); err != nil {
+			return fmt.Errorf("remove stale split output: %w", err)
+		}
+		if err := ensureSplitDiskSpace(outputPath, workDir); err != nil {
+			return err
+		}
 		lock := utils.AcquireProcessingLock("processing")
 		defer lock.Release()
 		startStep(ctx, process.ID, "merge")
-		assets, err = downloader.SplitMedia(ctx, outputPath, filepath.Join(workDir, "separated"), trackedPercent(ctx, process.ID, slug, "merge"))
+		assets, err = downloader.SplitMedia(ctx, outputPath, separatedDir, trackedPercent(ctx, process.ID, slug, "merge"))
 		if err != nil {
+			failStep(context.Background(), process.ID, "merge")
 			if errors.Is(context.Cause(ctx), queue.ErrJobCancelled) {
 				return queue.ErrJobCancelled
+			}
+			if downloader.IsDiskFullError(err) {
+				_ = os.RemoveAll(separatedDir)
+				return fmt.Errorf("split video/audio/subtitles: %v: %w", err, queue.ErrJobRequeue)
 			}
 			return fmt.Errorf("split video/audio/subtitles: %w", err)
 		}
@@ -97,6 +116,7 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 			startStep(ctx, process.ID, "merge")
 			normalized := filepath.Join(workDir, models.FileNameOriginal)
 			if err := downloader.EnsureH264Faststart(ctx, outputPath, normalized, trackedPercent(ctx, process.ID, slug, "merge")); err != nil {
+				failStep(context.Background(), process.ID, "merge")
 				if errors.Is(context.Cause(ctx), queue.ErrJobCancelled) {
 					return queue.ErrJobCancelled
 				}
@@ -119,6 +139,7 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 			continue
 		}
 		if err := downloader.EnsureMoovBeforeMdat(ctx, assets[index].Path, nil); err != nil {
+			failStep(context.Background(), process.ID, "merge")
 			return fmt.Errorf("ensure video faststart: %w", err)
 		}
 		assetInfo, statErr := os.Stat(assets[index].Path)
@@ -152,6 +173,7 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 		switch storage.Provider {
 		case enums.StorageTypeS3:
 			if err := uploader.UploadToS3(ctx, storage, asset.Path, objectKey, trackedBytes(ctx, process.ID, slug, "upload")); err != nil {
+				failStep(context.Background(), process.ID, "upload")
 				return fmt.Errorf("upload temp S3 %s: %w", asset.FileName, err)
 			}
 		case enums.StorageTypeLocal:
@@ -160,6 +182,7 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 			}
 			target := filepath.Join(storage.Local.BasePath, filepath.FromSlash(objectKey))
 			if err := copyFileLocal(asset.Path, target, trackedBytes(ctx, process.ID, slug, "upload")); err != nil {
+				failStep(context.Background(), process.ID, "upload")
 				return fmt.Errorf("copy %s to local temp storage: %w", asset.FileName, err)
 			}
 		default:
@@ -245,6 +268,32 @@ func Run(ctx context.Context, process *models.VideoProcess) error {
 	return nil
 }
 
+const splitDiskReserve = int64(512 * 1024 * 1024)
+
+func ensureSplitDiskSpace(inputPath, workDir string) error {
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		return fmt.Errorf("stat split source: %w", err)
+	}
+	total, _, free := queue.DiskUsage(workDir)
+	if total <= 0 {
+		return nil
+	}
+	required := requiredSplitDiskBytes(info.Size())
+	if free < required {
+		return fmt.Errorf(
+			"split requires at least %.2f GB free (source %.2f GB + reserve %.2f GB), only %.2f GB available: %w",
+			float64(required)/(1024*1024*1024), float64(info.Size())/(1024*1024*1024),
+			float64(splitDiskReserve)/(1024*1024*1024), float64(free)/(1024*1024*1024), queue.ErrJobRequeue,
+		)
+	}
+	return nil
+}
+
+func requiredSplitDiskBytes(sourceSize int64) int64 {
+	return sourceSize + splitDiskReserve
+}
+
 func acquireSource(ctx context.Context, process *models.VideoProcess, file *models.File, workDir, slug string) (string, *models.Ingest, string, string, error) {
 	sourcePath := filepath.Join(workDir, "source.mp4")
 	ingest, err := models.IngestModel.FindOne(ctx, bson.M{
@@ -259,6 +308,7 @@ func acquireSource(ctx context.Context, process *models.VideoProcess, file *mode
 		}
 		startStep(ctx, process.ID, "download")
 		if err := downloadIngest(ctx, ingest, sourcePath, process.ID, slug); err != nil {
+			failStep(context.Background(), process.ID, "download")
 			return "", ingest, ingest.SourceType, "", err
 		}
 		completeStep(ctx, process.ID, "download")
@@ -282,6 +332,7 @@ func acquireSource(ctx context.Context, process *models.VideoProcess, file *mode
 	if playlistURL == "" && downloader.IsDirectVideoURL(sourceURL) {
 		startStep(ctx, process.ID, "download")
 		if err := downloader.DownloadDirectFile(ctx, sourceURL, sourcePath, trackedBytes(ctx, process.ID, slug, "download")); err != nil {
+			failStep(context.Background(), process.ID, "download")
 			return "", nil, "remote", "", fmt.Errorf("direct download: %w", err)
 		}
 		completeStep(ctx, process.ID, "download")
@@ -311,6 +362,7 @@ func acquireSource(ctx context.Context, process *models.VideoProcess, file *mode
 		OnProgress: trackedSegments(ctx, process.ID, slug),
 	})
 	if err != nil {
+		failStep(context.Background(), process.ID, "download")
 		return "", nil, "remote", playlistURL, fmt.Errorf("download HLS: %w", err)
 	}
 	completeStep(ctx, process.ID, "download")
@@ -318,6 +370,7 @@ func acquireSource(ctx context.Context, process *models.VideoProcess, file *mode
 	outputPath := filepath.Join(workDir, models.FileNameOriginal)
 	merge, err := downloader.MergeToMP4(ctx, result.SegmentFiles, outputPath, trackedPercent(ctx, process.ID, slug, "merge"))
 	if err != nil {
+		failStep(context.Background(), process.ID, "merge")
 		return "", nil, "remote", playlistURL, fmt.Errorf("merge HLS: %w", err)
 	}
 	completeStep(ctx, process.ID, "merge")

@@ -78,12 +78,17 @@ func copyFileLocal(src, dst string, progress func(int64, int64)) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	out, err := os.Create(dst + ".part")
+	partPath := dst + ".part"
+	out, err := os.Create(partPath)
 	if err != nil {
 		return err
 	}
+	completed := false
 	defer func() {
 		_ = out.Close()
+		if !completed {
+			_ = os.Remove(partPath)
+		}
 	}()
 	var copied int64
 	buf := make([]byte, 512*1024)
@@ -109,7 +114,11 @@ func copyFileLocal(src, dst string, progress func(int64, int64)) error {
 		return err
 	}
 	_ = os.Remove(dst)
-	return os.Rename(dst+".part", dst)
+	if err := os.Rename(partPath, dst); err != nil {
+		return err
+	}
+	completed = true
+	return nil
 }
 
 func resolveTempStorage(ctx context.Context, process *models.VideoProcess) (*models.Storage, error) {

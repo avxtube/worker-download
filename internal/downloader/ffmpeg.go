@@ -26,8 +26,10 @@ func IsDiskFullError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "No space left") ||
-		strings.Contains(err.Error(), "disk full")
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no space left") ||
+		strings.Contains(message, "disk full") ||
+		strings.Contains(message, "not enough space")
 }
 
 // MergeToMP4 merges .ts segment files into a single MP4 using ffmpeg

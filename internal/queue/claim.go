@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"worker-download/internal/core/enums"
@@ -194,6 +195,11 @@ func RetryOrFail(ctx context.Context, job *models.VideoProcess, workerID, errMsg
 	if result.MatchedCount == 0 {
 		return false, fmt.Errorf("job lease lost before failure")
 	}
+	if cleanupErr := cleanupTerminalWorkDir(job.ID); cleanupErr != nil {
+		log.Printf("⚠️ Terminal cleanup failed for job %s: %v", job.ID, cleanupErr)
+	} else {
+		log.Printf("🧹 Removed terminal work directory for job %s; the next manual retry will start clean", job.ID)
+	}
 
 	if job.FileID != nil {
 		now := time.Now()
@@ -225,6 +231,24 @@ func Release(ctx context.Context, jobID, workerID string) error {
 	)
 	if err != nil && errors.Is(err, mongo.ErrNoDocuments) {
 		return nil // already completed/reaped — nothing to release
+	}
+	return err
+}
+
+// ReleaseAfter returns a resource-blocked job without consuming a retry and
+// prevents the worker from immediately claiming the same job again.
+func ReleaseAfter(ctx context.Context, jobID, workerID string, delay time.Duration) error {
+	_, err := models.VideoProcessModel.FindOneAndUpdate(ctx,
+		bson.M{"_id": jobID, "status": enums.ProcessStatusProcessing, "workerId": workerID},
+		bson.M{
+			"$set": bson.M{
+				"status": enums.ProcessStatusPending, "nextRetryAt": time.Now().Add(delay), "updatedAt": time.Now(),
+			},
+			"$unset": bson.M{"workerId": "", "claimedAt": "", "heartbeatAt": "", "leaseExpiresAt": "", "startedAt": ""},
+		},
+	)
+	if err != nil && errors.Is(err, mongo.ErrNoDocuments) {
+		return nil
 	}
 	return err
 }

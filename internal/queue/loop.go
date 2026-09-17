@@ -178,14 +178,27 @@ func runJob(ctx context.Context, workerID string, job *models.VideoProcess, hand
 
 	case cancelled:
 		// admin สั่งยกเลิก — doc เป็น cancelled แล้ว ห้ามไปเขียนทับ
+		if cleanupErr := cleanupTerminalWorkDir(job.ID); cleanupErr != nil {
+			log.Printf("⚠️ Cancelled-job cleanup failed for job %s: %v", job.ID, cleanupErr)
+		} else {
+			log.Printf("🧹 Removed cancelled work directory for job %s", job.ID)
+		}
 		log.Printf("⏹️ Job %s cancelled by admin (after %s)", job.ID, time.Since(start).Round(time.Second))
 
-	case ctx.Err() != nil || errors.Is(err, context.Canceled), errors.Is(err, ErrJobRequeue):
-		// shutdown / disk เต็ม — ไม่ใช่ความผิดของงาน คืนเข้าคิวไม่นับ retry
+	case ctx.Err() != nil || errors.Is(err, context.Canceled):
+		// shutdown — คืนเข้าคิวทันทีและไม่นับ retry
 		if e := Release(settleCtx, job.ID, workerID); e != nil {
 			log.Printf("⚠️ Release failed for job %s: %v", job.ID, e)
 		}
 		log.Printf("↩️ Job %s released back to queue: %v", job.ID, err)
+
+	case errors.Is(err, ErrJobRequeue):
+		// Resource/dependency failures need time to recover. Delaying prevents a
+		// tight claim → fail → release loop when the source is larger than free disk.
+		if e := ReleaseAfter(settleCtx, job.ID, workerID, time.Minute); e != nil {
+			log.Printf("⚠️ Delayed release failed for job %s: %v", job.ID, e)
+		}
+		log.Printf("↩️ Job %s released back to queue for 1m without consuming a retry: %v", job.ID, err)
 
 	default:
 		retried, e := RetryOrFail(settleCtx, job, workerID, err.Error(), categorize(err))

@@ -149,12 +149,15 @@ func stepOverall(step string, value float64) float64 {
 
 func startStep(ctx context.Context, processID, step string) {
 	now := time.Now()
-	models.VideoProcessModel.UpdateByID(ctx, processID, bson.M{"$set": bson.M{
-		fmt.Sprintf("timeline.%s.status", step):    enums.StepStatusProcessing,
-		fmt.Sprintf("timeline.%s.percent", step):   0,
-		fmt.Sprintf("timeline.%s.startedAt", step): now,
-		"updatedAt": now,
-	}})
+	models.VideoProcessModel.UpdateByID(ctx, processID, bson.M{
+		"$set": bson.M{
+			fmt.Sprintf("timeline.%s.status", step):    enums.StepStatusProcessing,
+			fmt.Sprintf("timeline.%s.percent", step):   0,
+			fmt.Sprintf("timeline.%s.startedAt", step): now,
+			"updatedAt": now,
+		},
+		"$unset": bson.M{fmt.Sprintf("timeline.%s.endedAt", step): ""},
+	})
 }
 
 func completeStep(ctx context.Context, processID, step string) {
@@ -173,5 +176,14 @@ func completeStep(ctx context.Context, processID, step string) {
 		fmt.Sprintf("timeline.%s.percent", step): 100,
 		fmt.Sprintf("timeline.%s.endedAt", step): now,
 		"overallPercent":                         overall, "updatedAt": now,
+	}})
+}
+
+func failStep(ctx context.Context, processID, step string) {
+	now := time.Now()
+	models.VideoProcessModel.UpdateByID(ctx, processID, bson.M{"$set": bson.M{
+		fmt.Sprintf("timeline.%s.status", step):  enums.StepStatusFailed,
+		fmt.Sprintf("timeline.%s.endedAt", step): now,
+		"updatedAt":                              now,
 	}})
 }
